@@ -1,0 +1,38 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Notebooks
+*.ipynb
+
+# Archives
+*.zip
+
+# Word documents
+*.docx
+*.doc
+
+# Data files
+*.rsmf
+*.json
+*.eml
+
+# Test results
+test_result/
+
+# Claude
+*.claude
+
+# Logs
+*.log
+
+# Executables
+*.exe
+chrome-win64/
