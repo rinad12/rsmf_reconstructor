@@ -8,13 +8,27 @@ import tempfile
 import zipfile
 
 
-
 def parse_rsmf(path: Path | str) -> dict:
+    """Parse an RSMF file and extract its components.
+
+    Reads the file as a MIME message and extracts the sender/recipient headers,
+    the plain-text body, and the raw ZIP attachment bytes.
+
+    Args:
+        path: Path to the .rsmf file on disk.
+
+    Returns:
+        A dict with keys:
+            - ``head``: dict with ``from`` and ``to`` decoded header strings.
+            - ``text``: decoded text body of the first text part, or ``None``.
+            - ``zip_bytes``: raw bytes of the first non-text attachment, or ``None``.
+    """
     path = Path(path)
     raw = path.read_bytes()
     msg = email.message_from_bytes(raw, policy=policy.default)
 
     def decode_header_value(val):
+        """Decode a potentially RFC-2047-encoded header value to a plain string."""
         if not val:
             return ""
         parts = email.header.decode_header(val)
@@ -49,14 +63,37 @@ def parse_rsmf(path: Path | str) -> dict:
         'zip_bytes': zip_bytes
     }
 
+
 def parse_rsmf_manifest(zip_bytes: bytes) -> dict:
+    """Read and parse the RSMF manifest from the ZIP attachment.
+
+    Args:
+        zip_bytes: Raw bytes of the ZIP archive embedded in an RSMF file.
+
+    Returns:
+        Parsed contents of ``rsmf_manifest.json`` as a dict.
+    """
     with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zip_file:
         manifest = json.loads(zip_file.read('rsmf_manifest.json'))
     return manifest
 
+
 def extract_rsmf_files(zip_bytes: bytes) -> Path:
+    """Extract the ``attachments/`` folder from the RSMF ZIP to a temporary directory.
+
+    Only entries whose path starts with ``attachments/`` are extracted;
+    all other ZIP members are ignored.
+
+    Args:
+        zip_bytes: Raw bytes of the ZIP archive embedded in an RSMF file.
+
+    Returns:
+        Path to the extracted ``attachments/`` directory inside a temporary folder.
+        The caller is responsible for cleaning up the temporary directory when done.
+    """
     tmp_dir = Path(tempfile.mkdtemp())
     with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zip_file:
-        zip_file.extractall(tmp_dir)
-    return tmp_dir
-        
+        attachment_members = [m for m in zip_file.infolist() if m.filename.startswith('attachments/')]
+        for member in attachment_members:
+            zip_file.extract(member, tmp_dir)
+    return tmp_dir / 'attachments'
