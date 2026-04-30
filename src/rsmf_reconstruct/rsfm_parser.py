@@ -1,12 +1,16 @@
-import io
 import email
 import email.header
-import zipfile
 from email import policy
+import io
+import json
 from pathlib import Path
+import tempfile
+import zipfile
 
 
-def parse_rsmf(path: Path) -> dict:
+
+def parse_rsmf(path: Path | str) -> dict:
+    path = Path(path)
     raw = path.read_bytes()
     msg = email.message_from_bytes(raw, policy=policy.default)
 
@@ -19,53 +23,40 @@ def parse_rsmf(path: Path) -> dict:
             for p, enc in parts
         )
 
-    result = {
-        'file': path.name,
+    head = {
         'from': decode_header_value(msg.get('From', '')),
         'to': decode_header_value(msg.get('To', '')),
-        'parts': [],
     }
+    text = None
+    zip_bytes = None
 
     for part in msg.walk():
         if part.get_content_maintype() == 'multipart':
             continue
 
-        ctype = part.get_content_type()
         payload = part.get_payload(decode=True)
-
         if payload is None:
             continue
 
-        if ctype.startswith('text/'):
-            content = payload.decode('utf-8', errors='replace')
-            result['parts'].append({
-                'content_type': ctype,
-                'content': content,
-                'filename': part.get_filename(),
-            })
-        elif part.get_filename() == 'rsmf.zip':
-            with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-                for name in zf.namelist():
-                    doc_bytes = zf.read(name)
-                    result['parts'].append({
-                        'content_type': 'application/octet-stream',
-                        'content': doc_bytes,
-                        'filename': name,
-                    })
-        else:
-            result['parts'].append({
-                'content_type': ctype,
-                'content': payload,
-                'filename': part.get_filename(),
-            })
+        if part.get_content_maintype() == 'text' and text is None:
+            text = payload.decode('utf-8', errors='replace')
+        elif zip_bytes is None:
+            zip_bytes = payload
 
-    return result
+    return {
+        'head': head,
+        'text': text,
+        'zip_bytes': zip_bytes
+    }
 
-def parse_rsfm_manifest(manifest_bytes: bytes) -> dict:
-    manifest_str = manifest_bytes.decode('utf-8', errors='replace')
-    manifest = {}
-    for line in manifest_str.splitlines():
-        if ':' in line:
-            key, value = line.split(':', 1)
-            manifest[key.strip()] = value.strip()
+def parse_rsmf_manifest(zip_bytes: bytes) -> dict:
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zip_file:
+        manifest = json.loads(zip_file.read('rsmf_manifest.json'))
     return manifest
+
+def extract_rsmf_files(zip_bytes: bytes) -> Path:
+    tmp_dir = Path(tempfile.mkdtemp())
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zip_file:
+        zip_file.extractall(tmp_dir)
+    return tmp_dir
+        
