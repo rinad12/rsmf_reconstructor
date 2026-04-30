@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+rsmf-reconstruct = "rsmf_reconstruct.main:main"
+
 [dependency-groups]
 dev = [
     "pyinstaller>=6.20.0",

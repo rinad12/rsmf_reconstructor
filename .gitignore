@@ -21,6 +21,7 @@ wheels/
 
 # Data files
 *.rsmf
+*.json
 
 # Test results
 test_result/
