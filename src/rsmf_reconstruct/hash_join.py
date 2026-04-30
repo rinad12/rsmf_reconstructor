@@ -23,6 +23,8 @@ Typical workflow::
 """
 
 import hashlib
+import re
+import unicodedata
 
 
 def build_participants_map(participants: list[dict]) -> dict[str, str]:
@@ -117,13 +119,36 @@ def normalize_message(msg: dict) -> dict:
     return {**msg, "custom": list(msg.get("custom", []))}
 
 
+def _compute_fingerprint(msg: dict, participants_map: dict[str, str]) -> str:
+    """Always compute the MD5 fingerprint, ignoring any native ``id``.
+
+    Normalises three sources of instability before hashing:
+
+    - **Sub-second clock drift** — milliseconds are stripped so that
+      ``12:00:01.000Z`` and ``12:00:01.005Z`` produce the same key.
+    - **Unicode form** — body and sender are NFC-normalised so that the same
+      text in NFC and NFD form (e.g. ``"café"`` vs ``"cafe\\u0301"``) hashes
+      identically regardless of which client generated the export.
+    - **Null body** — ``None`` and absent ``"body"`` both collapse to ``""``.
+
+    This function is also used to build a secondary fingerprint index for
+    id-bearing messages, enabling :func:`reconcile_conversations` to resolve
+    ID-ambiguity (one export has a native id, the other does not).
+    """
+    ts = re.sub(r"\.\d+", "", msg.get("timestamp", ""))
+    sender = unicodedata.normalize("NFC", _get_sender(msg, participants_map))
+    body = unicodedata.normalize("NFC", msg.get("body") or "")
+    composite = f"{ts}|{sender}|{body}"
+    return hashlib.md5(composite.encode("utf-8")).hexdigest()
+
+
 def get_message_key(msg: dict, participants_map: dict[str, str]) -> str:
     """Return a stable unique key for a raw RSMF message dict.
 
     Prefers the native ``"id"`` field.  When ``"id"`` is absent or falsy,
-    computes an MD5 fingerprint from the concatenation of ``timestamp``,
-    sender (resolved via :func:`_get_sender`), and ``body`` to produce a
-    deterministic surrogate key.
+    delegates to :func:`_compute_fingerprint` which produces a normalised MD5
+    digest that is stable across sub-second clock drift, Unicode forms, and
+    null body values.
 
     The MD5 hash is used solely for deduplication keying, not for
     cryptographic purposes.
@@ -147,10 +172,7 @@ def get_message_key(msg: dict, participants_map: dict[str, str]) -> str:
     """
     if msg.get("id"):
         return msg["id"]
-
-    sender = _get_sender(msg, participants_map)
-    composite = f"{msg.get('timestamp', '')}|{sender}|{msg.get('body', '')}"
-    return hashlib.md5(composite.encode("utf-8")).hexdigest()
+    return _compute_fingerprint(msg, participants_map)
 
 
 def reconcile_conversations(
@@ -172,9 +194,8 @@ def reconcile_conversations(
       indicating the other participant deleted it from their side.  The name
       in the status is the person whose export is *missing* the message.
 
-    The result preserves insertion order (Python 3.7+ dict ordering): messages
-    from ``user_a_msgs`` appear first, followed by messages exclusive to
-    ``user_b_msgs``.
+    The result is sorted by ``(timestamp, participant)`` ascending so the
+    returned list is a strict chronological timeline.
 
     Args:
         user_a_msgs: Raw message dicts from User A's RSMF export.
@@ -185,7 +206,7 @@ def reconcile_conversations(
             forwarded to :func:`get_message_key` and :func:`normalize_message`.
 
     Returns:
-        A list of dicts, each with two keys:
+        A list of dicts sorted chronologically, each with two keys:
 
         - ``"data"`` (dict): Normalised message produced by
           :func:`normalize_message`.
@@ -206,24 +227,53 @@ def reconcile_conversations(
         data["custom"].append({"name": "Deleted by", "value": deleted_by})
         return {"data": data, "status": f"Deleted by {deleted_by}"}
 
-    global_timeline = {}
+    def _verify(entry: dict) -> None:
+        entry["status"] = "Verified in Both"
+        entry["data"]["custom"] = [
+            f for f in entry["data"]["custom"] if f.get("name") != "Deleted by"
+        ]
+
+    global_timeline: dict[str, dict] = {}
+    # Maps MD5 fingerprint of id-bearing A messages → their key in global_timeline.
+    # Used to resolve ID-ambiguity: B exports the same message without a native id.
+    fp_to_key: dict[str, str] = {}
+    seen_a: dict[str, int] = {}
 
     for msg in user_a_msgs:
-        key = get_message_key(msg, participants_map)
+        base_key = get_message_key(msg, participants_map)
+        n = seen_a.get(base_key, 0)
+        seen_a[base_key] = n + 1
+        # Append a collision suffix so two identical fingerprint-only messages
+        # don't overwrite each other (prevents duplicate-message DATA LOSS).
+        key = base_key if n == 0 else f"{base_key}#{n}"
         global_timeline[key] = _make_entry(msg, user_b_name)
+        if msg.get("id"):
+            fp_to_key.setdefault(_compute_fingerprint(msg, participants_map), key)
 
+    seen_b: dict[str, int] = {}
     for msg in user_b_msgs:
-        key = get_message_key(msg, participants_map)
+        base_key = get_message_key(msg, participants_map)
+        n = seen_b.get(base_key, 0)
+        seen_b[base_key] = n + 1
+        key = base_key if n == 0 else f"{base_key}#{n}"
+
+        # ID-ambiguity bridge: if B has no native id and the plain key isn't
+        # in the timeline, check whether A stored the same message under its
+        # native id by looking up the MD5 fingerprint.
+        if not msg.get("id") and key not in global_timeline:
+            key = fp_to_key.get(base_key, key)
+
         if key in global_timeline:
-            entry = global_timeline[key]
-            entry["status"] = "Verified in Both"
-            entry["data"]["custom"] = [
-                f for f in entry["data"]["custom"] if f.get("name") != "Deleted by"
-            ]
+            _verify(global_timeline[key])
         else:
             global_timeline[key] = _make_entry(msg, user_a_name)
 
-    return list(global_timeline.values())
+    result = list(global_timeline.values())
+    result.sort(key=lambda e: (
+        e["data"].get("timestamp", ""),
+        e["data"].get("participant", ""),
+    ))
+    return result
 
 
 def sort_timeline(timeline: list[dict]) -> list[dict]:

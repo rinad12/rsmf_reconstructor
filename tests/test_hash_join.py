@@ -1,20 +1,13 @@
+
 """Forensic stress-test suite for hash_join.py.
 
-Each test class maps to one risk category. Tests that expose a confirmed bug in
-the current implementation are marked ``xfail(strict=True)`` so that:
-
-- Running against unfixed code → the test shows as ``xfail`` (expected failure).
-- Running after the fix → the test turns into an unexpected pass (``XPASS``),
-  signalling that the ``xfail`` marker should be removed.
-
-Tests without ``xfail`` assert behaviour the current code already satisfies.
+Each test class maps to one risk category and asserts the correct,
+production-grade behaviour expected of the reconciliation logic.
 """
 
 import hashlib
 import time
 import unicodedata
-
-import pytest
 
 from rsmf_reconstruct.hash_join import (
     _get_sender,
@@ -52,7 +45,6 @@ def _statuses(result):
 # ---------------------------------------------------------------------------
 
 class TestClockDrift:
-    """FALSE POSITIVE risk: sub-second timestamp differences produce distinct fingerprints."""
 
     def test_exact_millisecond_match_is_verified(self):
         a = _msg(ts="2024-01-01T12:00:01.000Z", body="Same")
@@ -61,15 +53,6 @@ class TestClockDrift:
         assert len(result) == 1
         assert result[0]["status"] == "Verified in Both"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: 5 ms clock drift produces two 'Deleted by' entries for the same message. "
-            "FIX: Normalise timestamps to second precision before fingerprinting, e.g. "
-            "strip sub-second components with a regex or dateutil.parser, so that "
-            "2024-01-01T12:00:01.000Z and 2024-01-01T12:00:01.005Z share one key."
-        ),
-    )
     def test_5ms_clock_drift_resolves_to_single_verified_entry(self):
         a = _msg(ts="2024-01-01T12:00:01.000Z", body="Meeting at 3")
         b = _msg(ts="2024-01-01T12:00:01.005Z", body="Meeting at 3")
@@ -94,16 +77,11 @@ class TestClockDrift:
 # ---------------------------------------------------------------------------
 
 class TestUnicodeNormalization:
-    """FALSE POSITIVE risk: NFC vs NFD of the same string yields a different MD5.
+    """NFC normalisation ensures the same text in different Unicode forms hashes identically.
 
-    Hebrew and Arabic base characters have no precomposed NFC forms in Unicode,
-    so ``normalize("NFD", "שלום")`` is a no-op and those strings are immune.
-    The real risk arises when:
-      (a) message bodies contain Latin-script words with diacritics (e.g. "café",
-          "naïve", "Zürich") stored differently by different client apps, OR
-      (b) participant display names contain diacritics (common in Romanised names).
-    The defensive fix — NFC-normalise unconditionally — costs nothing and future-
-    proofs the fingerprint against any app that generates NFD output.
+    Hebrew and Arabic base characters have no precomposed NFC forms, so they are
+    unaffected.  The real risk is Latin diacritics (e.g. "café", "Zürich") or
+    Romanised display names where different client apps may produce NFC vs NFD.
     """
 
     # Latin text: precomposed NFC (é) vs decomposed NFD (e + combining acute)
@@ -122,29 +100,11 @@ class TestUnicodeNormalization:
         assert unicodedata.normalize("NFC", self.NFC_TEXT) == unicodedata.normalize("NFC", self.NFD_TEXT)
         assert self.NFC_TEXT != self.NFD_TEXT  # but byte-level they differ
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: NFC and NFD encodings of the same text produce different MD5s because "
-            "get_message_key encodes the raw string bytes without normalising first. "
-            "FIX: In get_message_key, NFC-normalise body and sender before hashing: "
-            "  body   = unicodedata.normalize('NFC', msg.get('body') or '') "
-            "  sender = unicodedata.normalize('NFC', sender)"
-        ),
-    )
     def test_nfc_nfd_body_produce_same_fingerprint(self):
         key_nfc = get_message_key(_msg(body=self.NFC_TEXT), PMAP)
         key_nfd = get_message_key(_msg(body=self.NFD_TEXT), PMAP)
         assert key_nfc == key_nfd
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: A message body in NFC form and the same body in NFD form are treated "
-            "as two separate messages — FALSE POSITIVE. "
-            "FIX: NFC-normalise before fingerprinting (see above)."
-        ),
-    )
     def test_nfc_nfd_body_reconcile_as_one_verified_entry(self):
         a = _msg(body=self.NFC_TEXT)
         b = _msg(body=self.NFD_TEXT)
@@ -152,16 +112,6 @@ class TestUnicodeNormalization:
         assert len(result) == 1
         assert result[0]["status"] == "Verified in Both"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: A display name stored in NFC form vs NFD form in participants_map "
-            "produces a different sender string and therefore a different fingerprint. "
-            "This can occur when one export's manifest was generated by a different app "
-            "than the other's. "
-            "FIX: NFC-normalise the resolved sender in get_message_key."
-        ),
-    )
     def test_sender_display_name_nfc_nfd_fingerprint_stable(self):
         # Romanised Hebrew name containing a diacritic ("Yoav Gölan")
         name_nfc = "Yoav Gölan"    # ö as single codepoint
@@ -177,19 +127,7 @@ class TestUnicodeNormalization:
 # ---------------------------------------------------------------------------
 
 class TestIdenticalMessageCollisions:
-    """DATA LOSS risk: two identical messages at the same millisecond share a key."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: Two '👍' messages sent in the same millisecond map to the same MD5 key. "
-            "The second message overwrites the first in global_timeline → DATA LOSS. "
-            "FIX: Track a per-key collision counter and append '#N' to the key when a "
-            "duplicate fingerprint is encountered within the same export, e.g.: "
-            "  seen = {}; n = seen.get(key, 0); seen[key] = n + 1 "
-            "  unique_key = key if n == 0 else f'{key}#{n}'"
-        ),
-    )
     def test_two_identical_messages_same_millisecond_both_survive(self):
         msg1 = _msg(ts="2024-01-01T12:00:00.000Z", body="👍")
         msg2 = _msg(ts="2024-01-01T12:00:00.000Z", body="👍")
@@ -219,18 +157,7 @@ class TestIdenticalMessageCollisions:
 # ---------------------------------------------------------------------------
 
 class TestIDAmbiguity:
-    """FALSE POSITIVE: one export has native id, the other has null → two distinct keys."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: Same physical message with id='42' in export A and id=null in export B "
-            "produces two separate timeline entries — FALSE POSITIVE. "
-            "FIX: After building both keyed maps, compute a secondary fingerprint index for "
-            "id-bearing messages and reconcile id-less messages against it before treating "
-            "them as new entries."
-        ),
-    )
     def test_id_vs_null_same_physical_message_merges(self):
         msg_with_id = {
             "id": "42",
@@ -276,16 +203,6 @@ class TestIDAmbiguity:
 
 class TestMissingOrCorruptFields:
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: body=null (JSON null → Python None) and body=absent produce different "
-            "fingerprints. `msg.get('body', '')` returns None when the key exists with a "
-            "null value, so the composite becomes '…|None' instead of '…|'. "
-            "FIX: Replace `msg.get('body', '')` with `msg.get('body') or ''` in "
-            "get_message_key so that both null and absent body normalise to empty string."
-        ),
-    )
     def test_body_null_and_body_absent_fingerprint_identical(self):
         ts = "2024-01-01T12:00:00Z"
         msg_null   = {"timestamp": ts, "participant": "u1", "body": None}
@@ -346,18 +263,7 @@ class TestMissingOrCorruptFields:
 # ---------------------------------------------------------------------------
 
 class TestSortingStability:
-    """Verify output is strictly chronological — current code preserves insertion order only."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: reconcile_conversations returns messages in insertion order (A's messages "
-            "first, then B-exclusive messages), not chronological order. "
-            "FIX: Add a final sort step: "
-            "  result.sort(key=lambda e: (e['data'].get('timestamp', ''), "
-            "                             e['data'].get('participant', '')))"
-        ),
-    )
     def test_output_is_chronologically_sorted(self):
         early = _msg(ts="2024-01-01T09:00:00Z", body="Morning", id_="1")
         late  = _msg(ts="2024-01-01T17:00:00Z", body="Evening", id_="2")
@@ -367,14 +273,6 @@ class TestSortingStability:
             f"Output timestamps {timestamps} are not in ascending order."
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: Equal-timestamp ordering is insertion-order-dependent, not deterministic. "
-            "FIX: Use (timestamp, participant) as the sort key so same-timestamp messages "
-            "always appear in a stable, reproducible sequence regardless of input order."
-        ),
-    )
     def test_equal_timestamp_tie_breaker_is_deterministic(self):
         alice_msg = _msg(ts="2024-01-01T12:00:00Z", body="A says", id_="a1", sender="u1")
         bob_msg   = _msg(ts="2024-01-01T12:00:00Z", body="B says", id_="b1", sender="u2")
