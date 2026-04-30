@@ -226,6 +226,21 @@ def reconcile_conversations(
     return list(global_timeline.values())
 
 
+def sort_timeline(timeline: list[dict]) -> list[dict]:
+    """Sort a reconciled timeline by message timestamp ascending.
+
+    Entries without a timestamp are placed at the end.
+
+    Args:
+        timeline: Output of :func:`reconcile_conversations` — a list of
+            ``{"data": <msg>, "status": <str>}`` dicts.
+
+    Returns:
+        A new sorted list; the input is not mutated.
+    """
+    return sorted(timeline, key=lambda entry: entry["data"].get("timestamp") or "")
+
+
 def create_evidence_hashmap(messages: list[dict]) -> dict:
     """Index a list of normalised message dicts by their ``"id"`` field.
 

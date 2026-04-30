@@ -37,22 +37,36 @@ class _ModuleReporter:
 
             for r in reports:
                 if r.when == "call" or (r.when in ("setup", "teardown") and not r.passed):
-                    if r.passed:
+                    is_xfail = hasattr(r, "wasxfail")
+                    if r.passed and not is_xfail:
                         status = "PASSED"
                         passed += 1
+                    elif r.failed and is_xfail:
+                        # xfail(strict=True) unexpectedly passed → counts as failure
+                        status = "XPASS"
+                        failed += 1
                     elif r.failed:
                         status = "FAILED"
                         failed += 1
+                    elif is_xfail:
+                        status = "XFAIL"
+                        passed += 1
                     else:
                         status = "ERROR"
                         errored += 1
 
                     lines.append(f"[{status}] {r.nodeid}")
-                    if not r.passed and r.longrepr:
+                    if not r.passed and r.longrepr and status not in ("XFAIL",):
                         lines.append(str(r.longrepr))
                     lines.append("")
 
-            lines.append(f"Summary: {passed} passed, {failed} failed, {errored} errors")
+            xfailed = sum(
+                1 for r in reports
+                if r.when == "call" and hasattr(r, "wasxfail") and not r.failed
+            )
+            lines.append(
+                f"Summary: {passed} passed, {failed} failed, {errored} errors, {xfailed} xfailed"
+            )
             out.write_text("\n".join(lines), encoding="utf-8")
 
 
