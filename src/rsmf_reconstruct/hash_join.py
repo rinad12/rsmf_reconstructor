@@ -94,45 +94,27 @@ def _get_sender(msg: dict, participants_map: dict[str, str]) -> str:
     return participant_id or ""
 
 
-def normalize_message(msg: dict, participants_map: dict[str, str]) -> dict:
-    """Extract and return the canonical fields from a raw RSMF message dict.
+def normalize_message(msg: dict) -> dict:
+    """Return a shallow copy of a raw RSMF message dict, preserving all fields.
 
-    Reduces an arbitrary RSMF message dict to the six fields used downstream
-    by the reconciliation logic, discarding everything else.
+    The copy keeps the original structure intact so downstream code can rely on
+    all RSMF fields being present.  :func:`reconcile_conversations` appends a
+    ``{"name": "Deleted by", "value": "<name>"}`` entry to ``"custom"`` for
+    messages that appear in only one export — mutating the copy, not the input.
 
     Args:
-        msg: A raw RSMF message dict.  Recognised keys are ``"id"``,
-            ``"timestamp"``, ``"body"``, ``"attachments"``, ``"edits"``, and
-            any keys consumed by :func:`_get_sender`.
-        participants_map: Lookup map produced by :func:`build_participants_map`,
-            passed through to :func:`_get_sender` for display-name resolution.
+        msg: A raw RSMF message dict.
 
     Returns:
-        A dict with the following keys:
-
-        - ``"id"`` (any): Native message identifier, or ``None`` if absent.
-        - ``"sender"`` (str): Display name resolved by :func:`_get_sender`.
-        - ``"timestamp"`` (any): ISO-8601 timestamp string, or ``None``.
-        - ``"body"`` (str | None): Plain-text message body.
-        - ``"attachments"`` (list): List of attachment dicts (empty by default).
-        - ``"edits"`` (list): List of edit-history dicts (empty by default).
-        - ``"custom"`` (list): Copy of ``msg["custom"]`` (empty by default).
-          :func:`reconcile_conversations` appends a ``{"name": "Deleted by",
-          "value": "<name>"}`` entry here for messages absent from one export.
+        A shallow copy of ``msg`` with ``"custom"`` replaced by a new list so
+        that mutations to ``"custom"`` do not affect the original.
 
     Examples:
-        >>> normalize_message({"id": "1", "participant": "u0", "body": "Hi"}, {"u0": "Alice"})
-        {'id': '1', 'sender': 'Alice', 'timestamp': None, 'body': 'Hi', 'attachments': [], 'edits': [], 'custom': []}
+        >>> msg = {"id": "41", "type": "message", "body": "Hi", "custom": [{"name": "Source", "value": "WhatsApp"}]}
+        >>> normalize_message(msg) == {**msg, "custom": [{"name": "Source", "value": "WhatsApp"}]}
+        True
     """
-    return {
-        "id": msg.get("id"),
-        "sender": _get_sender(msg, participants_map),
-        "timestamp": msg.get("timestamp"),
-        "body": msg.get("body"),
-        "attachments": msg.get("attachments", []),
-        "edits": msg.get("edits", []),
-        "custom": list(msg.get("custom", [])),
-    }
+    return {**msg, "custom": list(msg.get("custom", []))}
 
 
 def get_message_key(msg: dict, participants_map: dict[str, str]) -> str:
@@ -220,7 +202,7 @@ def reconcile_conversations(
         {'1': 'Verified in Both', '2': 'Deleted by Bob', '3': 'Deleted by Alice'}
     """
     def _make_entry(msg: dict, deleted_by: str) -> dict:
-        data = normalize_message(msg, participants_map)
+        data = normalize_message(msg)
         data["custom"].append({"name": "Deleted by", "value": deleted_by})
         return {"data": data, "status": f"Deleted by {deleted_by}"}
 

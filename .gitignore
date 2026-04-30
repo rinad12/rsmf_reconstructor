@@ -22,5 +22,8 @@ wheels/
 # Data files
 *.rsmf
 
+# Test results
+test_result/
+
 # Claude
 *.claude
