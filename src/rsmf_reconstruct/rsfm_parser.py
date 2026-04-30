@@ -1,3 +1,12 @@
+"""RSMF file parser.
+
+Provides utilities for reading and unpacking RSMF (Rich Secure Message Format) files:
+
+- :func:`parse_rsmf` — parse an RSMF file into its header, text body, and ZIP bytes.
+- :func:`parse_rsmf_manifest` — extract and parse the manifest JSON from the ZIP.
+- :func:`extract_rsmf_files` — unpack the ``attachments/`` folder from the ZIP to disk.
+"""
+
 import email
 import email.header
 from email import policy
