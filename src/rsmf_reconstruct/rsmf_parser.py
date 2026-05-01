@@ -17,7 +17,7 @@ import tempfile
 import zipfile
 
 
-def _parse_rsmf(path: Path | str) -> dict:
+def parse_rsmf(path: Path | str) -> dict:
     """Parse an RSMF file and extract its components.
 
     Reads the file as a MIME message and extracts the sender/recipient headers,
@@ -73,7 +73,7 @@ def _parse_rsmf(path: Path | str) -> dict:
     }
 
 
-def _parse_rsmf_manifest(zip_bytes: bytes) -> dict:
+def parse_rsmf_manifest(zip_bytes: bytes) -> dict:
     """Read and parse the RSMF manifest from the ZIP attachment.
 
     Args:
@@ -122,6 +122,6 @@ def rsmf_load(path: str) -> tuple[dict, dict]:
         FileNotFoundError: If *path* does not exist.
         KeyError: If the archive is missing required internal entries.
     """
-    parsed = _parse_rsmf(path)
-    manifest = _parse_rsmf_manifest(parsed["zip_bytes"])
+    parsed = parse_rsmf(path)
+    manifest = parse_rsmf_manifest(parsed["zip_bytes"])
     return parsed["head"], manifest

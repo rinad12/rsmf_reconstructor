@@ -12,7 +12,7 @@ import pytest
 
 from rsmf_reconstruct.rsmf_parser import (
     extract_rsmf_files,
-    _parse_rsmf as parse_rsmf,
+    parse_rsmf,
     _parse_rsmf_manifest as parse_rsmf_manifest,
 )
 

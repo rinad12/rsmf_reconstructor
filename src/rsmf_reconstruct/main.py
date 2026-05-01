@@ -1,61 +1,43 @@
-"""CLI entry point for RSMF reconciliation.
+"""CLI entry point for RSMF reconciliation and export.
 
 Usage:
     python -m rsmf_reconstruct file_a.rsmf file_b.rsmf
-    rsmf-reconstruct file_a.rsmf file_b.rsmf [-o output.json]  # after pip install
+    rsmf-reconstruct file_a.rsmf file_b.rsmf [-o output.rsmf]  # after pip install
 """
 
 import argparse
-import json
 
+from rsmf_reconstruct.exporter_rsmf import export_to_rsmf
 from rsmf_reconstruct.hash_join import build_participants_map, reconcile_conversations
-from rsmf_reconstruct.rsmf_parser import rsmf_load
+from rsmf_reconstruct.rsmf_parser import extract_rsmf_files, rsmf_load
+from rsmf_reconstruct.rsmf_parser import parse_rsmf as parse_rsmf_raw
 
 
 def main() -> None:
-    """Run the RSMF reconciliation pipeline and write the result to disk.
+    """Run the RSMF reconciliation pipeline and write the result as an .rsmf container.
 
-    Reads two RSMF export files supplied as positional command-line
-    arguments, merges their participant rosters, and produces a single
-    chronologically-sorted timeline via :func:`reconcile_conversations`.
-    The merged output is written to ``reconciled_messages.json`` in the
-    current working directory.
+    Reads two RSMF export files, merges their participant rosters, reconciles
+    the message timelines, and packages the result into a valid RSMF 2.0.0
+    container via :func:`export_to_rsmf`.
 
     Command-line interface::
 
-        rsmf-reconstruct <file_a.rsmf> <file_b.rsmf> [-o output.json]
-
-    Args:
-        None — arguments are read from :data:`sys.argv`.
-
-    Returns:
-        None
+        rsmf-reconstruct <file_a.rsmf> <file_b.rsmf> [-o output.rsmf]
 
     Side effects:
-        * Writes the output file (default: ``reconciled_messages.json``).
+        * Writes the output .rsmf file (default: ``reconciled.rsmf``).
         * Exits with code 1 on argument errors.
-
-    Output schema:
-
-    .. code-block:: json
-
-        {
-            "version": "2.0.0",
-            "participants": [...],
-            "conversations": [...],
-            "events": [...]
-        }
     """
     parser = argparse.ArgumentParser(
         prog="rsmf-reconstruct",
-        description="Reconcile two RSMF message exports into a single timeline.",
+        description="Reconcile two RSMF message exports into a single .rsmf container.",
     )
     parser.add_argument("file_a", help="First participant's .rsmf export")
     parser.add_argument("file_b", help="Second participant's .rsmf export")
     parser.add_argument(
         "-o", "--output",
-        default="reconciled_messages.json",
-        help="Output file path (default: reconciled_messages.json)",
+        default="reconciled.rsmf",
+        help="Output file path (default: reconciled.rsmf)",
     )
     args = parser.parse_args()
 
@@ -82,15 +64,24 @@ def main() -> None:
     )
 
     # Use file_a as the source of truth for version and conversation metadata
-    output = {
+    reconciled_timeline = {
         "version": manifest_a.get("version", "2.0.0"),
         "participants": list(all_participants.values()),
         "conversations": manifest_a.get("conversations", []),
         "events": timeline,
     }
 
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
+    # Extract attachments from both files so every referenced file is available,
+    # including ones deleted by one participant that only appear in the other's export.
+    att_dir_a = extract_rsmf_files(parse_rsmf_raw(path_a)["zip_bytes"])
+    att_dir_b = extract_rsmf_files(parse_rsmf_raw(path_b)["zip_bytes"])
+
+    export_to_rsmf(
+        reconciled_timeline=reconciled_timeline,
+        original_manifest=manifest_a,
+        original_attachments_dir=[att_dir_a, att_dir_b],
+        output_path=args.output,
+    )
 
 
 if __name__ == "__main__":
