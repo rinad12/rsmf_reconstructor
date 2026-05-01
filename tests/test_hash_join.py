@@ -36,8 +36,8 @@ def _reconcile(a_msgs, b_msgs, pmap=None):
     return reconcile_conversations(a_msgs, b_msgs, "Alice", "Bob", pmap if pmap is not None else PMAP)
 
 
-def _statuses(result):
-    return [e["status"] for e in result]
+def _deleted_flags(result):
+    return [e["deleted"] for e in result]
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ class TestClockDrift:
         b = _msg(ts="2024-01-01T12:00:01.000Z", body="Same")
         result = _reconcile([a], [b])
         assert len(result) == 1
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_5ms_clock_drift_resolves_to_single_verified_entry(self):
         a = _msg(ts="2024-01-01T12:00:01.000Z", body="Meeting at 3")
@@ -61,7 +61,7 @@ class TestClockDrift:
             f"Expected 1 entry for clock-drifted messages, got {len(result)}. "
             "Both entries are incorrectly marked 'Deleted by …'."
         )
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_one_second_difference_stays_distinct(self):
         """A genuine 1-second gap between identical bodies is correctly two messages."""
@@ -69,7 +69,7 @@ class TestClockDrift:
         b = _msg(ts="2024-01-01T12:00:02Z", body="Hi")
         result = _reconcile([a], [b])
         assert len(result) == 2
-        assert all("Deleted by" in s for s in _statuses(result))
+        assert all(_deleted_flags(result))
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +110,7 @@ class TestUnicodeNormalization:
         b = _msg(body=self.NFD_TEXT)
         result = _reconcile([a], [b])
         assert len(result) == 1
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_sender_display_name_nfc_nfd_fingerprint_stable(self):
         # Romanised Hebrew name containing a diacritic ("Yoav Gölan")
@@ -136,14 +136,14 @@ class TestIdenticalMessageCollisions:
             f"Expected 2 entries for two distinct identical messages; got {len(result)}. "
             "One message was silently dropped — DATA LOSS."
         )
-        assert all(e["status"] == "Verified in Both" for e in result)
+        assert all(e["deleted"] == False for e in result)
 
     def test_different_bodies_same_timestamp_are_distinct(self):
         a = _msg(ts="2024-01-01T12:00:00.000Z", body="yes")
         b = _msg(ts="2024-01-01T12:00:00.000Z", body="no")
         result = _reconcile([a, b], [a, b])
         assert len(result) == 2
-        assert all(e["status"] == "Verified in Both" for e in result)
+        assert all(e["deleted"] == False for e in result)
 
     def test_different_senders_same_body_timestamp_are_distinct(self):
         a = _msg(ts="2024-01-01T12:00:00.000Z", body="ok", sender="u1")
@@ -172,7 +172,7 @@ class TestIDAmbiguity:
         }
         result = _reconcile([msg_with_id], [msg_without_id])
         assert len(result) == 1
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_null_id_field_falls_back_to_md5(self):
         msg = {"id": None, "timestamp": "2024-01-01T12:00:00Z", "participant": "u1", "body": "x"}
@@ -189,7 +189,7 @@ class TestIDAmbiguity:
         b = {"id": "99", "body": "Hi", "participant": "u1"}
         result = _reconcile([a], [b])
         assert len(result) == 1
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_native_id_takes_precedence_over_fingerprint(self):
         """Native id wins even when body would hash to the same MD5."""
@@ -212,7 +212,7 @@ class TestMissingOrCorruptFields:
     def test_body_null_does_not_crash_reconcile(self):
         msg = {"id": "a1", "timestamp": "2024-01-01T12:00:00Z", "participant": "u1", "body": None}
         result = _reconcile([msg], [msg])
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_missing_timestamp_does_not_crash(self):
         msg = {"id": "a2", "participant": "u1", "body": "No time"}
@@ -232,7 +232,7 @@ class TestMissingOrCorruptFields:
     def test_unknown_participant_in_reconcile_does_not_crash(self):
         msg = {"id": "x", "participant": "ghost_user", "body": "Boo"}
         result = _reconcile([msg], [msg], pmap={})
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_no_participant_field_returns_empty_sender(self):
         assert _get_sender({"timestamp": "T", "body": "Orphan"}, PMAP) == ""
@@ -250,7 +250,7 @@ class TestMissingOrCorruptFields:
         att = {"id": "att1", "participant": "u1", "body": None,
                "type": "attachment", "timestamp": "2024-01-01T12:00:00Z"}
         result = _reconcile([att], [att])
-        assert result[0]["status"] == "Verified in Both"
+        assert result[0]["deleted"] == False
 
     def test_participant_display_empty_falls_back_to_id(self):
         pmap = {"u1": ""}
@@ -268,7 +268,7 @@ class TestSortingStability:
         early = _msg(ts="2024-01-01T09:00:00Z", body="Morning", id_="1")
         late  = _msg(ts="2024-01-01T17:00:00Z", body="Evening", id_="2")
         result = _reconcile([late, early], [early, late])
-        timestamps = [e["data"].get("timestamp", "") for e in result]
+        timestamps = [e.get("timestamp", "") for e in result]
         assert timestamps == sorted(timestamps), (
             f"Output timestamps {timestamps} are not in ascending order."
         )
@@ -278,7 +278,7 @@ class TestSortingStability:
         bob_msg   = _msg(ts="2024-01-01T12:00:00Z", body="B says", id_="b1", sender="u2")
         order1 = _reconcile([alice_msg, bob_msg], [alice_msg, bob_msg])
         order2 = _reconcile([bob_msg, alice_msg], [bob_msg, alice_msg])
-        assert [e["data"]["body"] for e in order1] == [e["data"]["body"] for e in order2]
+        assert [e["body"] for e in order1] == [e["body"] for e in order2]
 
     def test_five_same_timestamp_messages_all_present(self):
         msgs = [_msg(ts="2024-01-01T12:00:00Z", body=f"msg{i}", id_=str(i)) for i in range(5)]
@@ -315,15 +315,14 @@ class TestScaleAndPerformance:
         elapsed = time.perf_counter() - start
         assert elapsed < 2.0, f"10k messages took {elapsed:.3f}s — exceeds 2s budget"
         assert len(result) == self.N
-        assert all(e["status"] == "Verified in Both" for e in result)
+        assert all(e["deleted"] == False for e in result)
 
     def test_10k_disjoint_messages_correct_statuses(self):
         a_msgs = [{"id": f"a-{i}", "participant": "u1", "body": f"a{i}"} for i in range(self.N)]
         b_msgs = [{"id": f"b-{i}", "participant": "u2", "body": f"b{i}"} for i in range(self.N)]
         result = _reconcile(a_msgs, b_msgs)
         assert len(result) == 2 * self.N
-        statuses = {e["status"] for e in result}
-        assert statuses == {"Deleted by Alice", "Deleted by Bob"}
+        assert all(e["deleted"] == True for e in result)
 
     def test_5k_fingerprint_only_messages_under_2_seconds(self):
         """Performance of the MD5 path (no native id) at scale."""
@@ -350,8 +349,7 @@ class TestScaleAndPerformance:
     def test_verified_entry_has_no_deleted_by_annotation(self):
         msg = {"id": "1", "body": "Both have this", "participant": "u1"}
         result = _reconcile([msg], [msg])
-        customs = result[0]["data"]["custom"]
-        assert not any(c.get("name") == "Deleted by" for c in customs)
+        assert not any(c.get("name") == "Deleted by" for c in result[0]["custom"])
 
 
 # ---------------------------------------------------------------------------
@@ -399,15 +397,15 @@ class TestFingerprintStrategySufficiency:
     def test_deleted_by_annotation_removed_on_verify(self):
         msg = {"id": "10", "body": "In both", "participant": "u1"}
         result = _reconcile([msg], [msg])
-        assert result[0]["status"] == "Verified in Both"
-        assert not any(c.get("name") == "Deleted by" for c in result[0]["data"]["custom"])
+        assert result[0]["deleted"] == False
+        assert not any(c.get("name") == "Deleted by" for c in result[0]["custom"])
 
     def test_deleted_by_annotation_present_for_a_only_message(self):
         msg = {"id": "X", "body": "Only in A", "participant": "u1"}
         result = _reconcile([msg], [])
         entry = result[0]
-        assert entry["status"] == "Deleted by Bob"
-        assert any(c["name"] == "Deleted by" for c in entry["data"]["custom"])
+        assert entry["deleted"] == True
+        assert any(c["name"] == "Deleted by" for c in entry["custom"])
 
     def test_build_participants_map_missing_display_stores_empty(self):
         pmap = build_participants_map([{"id": "u1"}, {"id": "u2", "display": ""}])
@@ -433,9 +431,9 @@ class TestFingerprintStrategySufficiency:
     def test_a_only_all_marked_deleted_by_bob(self):
         msgs = [{"id": str(i), "body": f"a{i}", "participant": "u1"} for i in range(5)]
         result = _reconcile(msgs, [])
-        assert all(e["status"] == "Deleted by Bob" for e in result)
+        assert all(e["deleted"] == True for e in result)
 
     def test_b_only_all_marked_deleted_by_alice(self):
         msgs = [{"id": str(i), "body": f"b{i}", "participant": "u2"} for i in range(5)]
         result = _reconcile([], msgs)
-        assert all(e["status"] == "Deleted by Alice" for e in result)
+        assert all(e["deleted"] == True for e in result)

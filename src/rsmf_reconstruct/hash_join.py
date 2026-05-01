@@ -206,12 +206,10 @@ def reconcile_conversations(
             forwarded to :func:`get_message_key` and :func:`normalize_message`.
 
     Returns:
-        A list of dicts sorted chronologically, each with two keys:
-
-        - ``"data"`` (dict): Normalised message produced by
-          :func:`normalize_message`.
-        - ``"status"`` (str): One of ``"Verified in Both"``,
-          ``"Deleted by <user_a_name>"``, or ``"Deleted by <user_b_name>"``.
+        A list of normalised message dicts sorted chronologically.  Each dict
+        is produced by :func:`normalize_message` and carries an additional
+        ``"deleted"`` key (``True`` when the message was absent from one
+        export, ``False`` when it appeared in both).
 
     Examples:
         >>> pmap = {"u1": "Alice", "u2": "Bob"}
@@ -219,19 +217,18 @@ def reconcile_conversations(
         >>> only_a  = {"id": "2", "body": "Secret", "participant": "u1"}
         >>> only_b  = {"id": "3", "body": "Reply",  "participant": "u2"}
         >>> result = reconcile_conversations([shared, only_a], [shared, only_b], "Alice", "Bob", pmap)
-        >>> {e["data"]["id"]: e["status"] for e in result}
-        {'1': 'Verified in Both', '2': 'Deleted by Bob', '3': 'Deleted by Alice'}
+        >>> {e["id"]: e["deleted"] for e in result}
+        {'1': False, '2': True, '3': True}
     """
     def _make_entry(msg: dict, deleted_by: str) -> dict:
         data = normalize_message(msg)
+        data["deleted"] = True
         data["custom"].append({"name": "Deleted by", "value": deleted_by})
-        return {"data": data, "status": f"Deleted by {deleted_by}"}
+        return data
 
-    def _verify(entry: dict) -> None:
-        entry["status"] = "Verified in Both"
-        entry["data"]["custom"] = [
-            f for f in entry["data"]["custom"] if f.get("name") != "Deleted by"
-        ]
+    def _verify(data: dict) -> None:
+        data["deleted"] = False
+        data["custom"] = [f for f in data["custom"] if f.get("name") != "Deleted by"]
 
     global_timeline: dict[str, dict] = {}
     # Maps MD5 fingerprint of id-bearing A messages → their key in global_timeline.
@@ -270,8 +267,8 @@ def reconcile_conversations(
 
     result = list(global_timeline.values())
     result.sort(key=lambda e: (
-        e["data"].get("timestamp", ""),
-        e["data"].get("participant", ""),
+        e.get("timestamp", ""),
+        e.get("participant", ""),
     ))
     return result
 
@@ -283,12 +280,12 @@ def sort_timeline(timeline: list[dict]) -> list[dict]:
 
     Args:
         timeline: Output of :func:`reconcile_conversations` — a list of
-            ``{"data": <msg>, "status": <str>}`` dicts.
+            normalised message dicts.
 
     Returns:
         A new sorted list; the input is not mutated.
     """
-    return sorted(timeline, key=lambda entry: entry["data"].get("timestamp") or "")
+    return sorted(timeline, key=lambda entry: entry.get("timestamp") or "")
 
 
 def create_evidence_hashmap(messages: list[dict]) -> dict:

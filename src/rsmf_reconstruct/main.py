@@ -47,9 +47,15 @@ def main() -> None:
         participants_map=participants_map,
     )
 
-    # SAve as JSON file for inspection/debugging
-    with open("reconciled_messages.json", "w") as f:
-        json.dump(timeline, f)
+    output = {
+        "version": manifest_a.get("version", "2.0.0"),
+        "participants": list(all_participants.values()),
+        "conversations": manifest_a.get("conversations", []),
+        "events": timeline,
+    }
+
+    with open("reconciled_messages.json", "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":
