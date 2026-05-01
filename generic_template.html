@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <title>דוח שחזור תכתובת - Forensic Report</title>
+    <style>
+        body {
+            font-family: ReportFont, sans-serif;
+            line-height: 1.6;
+            color: #1a202c;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 40px;
+            border-radius: 12px;
+        }
+
+        /* --- Header Section --- */
+        .header {
+            border-bottom: 3px solid #1a202c;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            color: #000;
+        }
+
+        .meta-table {
+            margin-top: 20px;
+            font-size: 14px;
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        .meta-table td {
+            padding: 5px 10px 5px 0;
+            vertical-align: top;
+        }
+
+        .meta-label {
+            font-weight: bold;
+            color: #718096;
+        }
+
+        /* --- Message Feed --- */
+        .message-feed {
+            display: block;
+        }
+
+        .message-row {
+            padding: 20px 15px;
+            border-bottom: 1px solid #e2e8f0;
+            page-break-inside: avoid;
+            display: block;
+            position: relative;
+        }
+
+        .message-row.is-deleted {
+            background-color: #fff5f5;
+            border-right: 5px solid #feb2b2;
+        }
+
+        .message-row.is-important {
+            border-left: 5px solid #e53e3e;
+        }
+
+        .msg-top-table {
+            margin-bottom: 8px;
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        .msg-sender {
+            font-weight: 800;
+            color: #2b6cb0;
+            font-size: 15px;
+        }
+
+        .msg-timestamp {
+            font-size: 12px;
+            color: #718096;
+            direction: ltr;
+        }
+
+        .msg-body {
+            font-size: 16px;
+            margin: 5px 0;
+            white-space: pre-wrap;
+        }
+
+        /* --- Edits History --- */
+        .edit-history {
+            margin-top: 12px;
+            padding: 12px;
+            background: #fffafa;
+            border: 1px solid #fc8181;
+            border-right: 4px solid #e53e3e;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .edit-title {
+            font-weight: bold;
+            color: #e53e3e;
+            font-size: 11px;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .edit-entry {
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        .edit-entry-border {
+            border-bottom: 1px solid #fed7d7;
+            margin-bottom: 5px;
+        }
+
+        .edit-old-text {
+            text-decoration: line-through;
+            color: #c87777;
+        }
+
+        .edit-metadata {
+            font-size: 11px;
+            font-style: italic;
+            color: #c53030;
+            margin-right: 15px;
+        }
+
+        /* --- Reactions --- */
+        .reactions {
+            display: block;
+            margin-top: 10px;
+        }
+
+        .reaction {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            padding: 2px 10px;
+            border-radius: 15px;
+            font-size: 13px;
+            display: inline-block;
+            margin: 2px 4px;
+        }
+
+        .reaction-user {
+            font-size: 10px;
+            color: #718096;
+            margin-right: 6px;
+        }
+
+        /* --- Attachments --- */
+        .attachments {
+            margin-top: 15px;
+            display: block;
+        }
+
+        .file-link {
+            display: block;
+            background: #f1f5f9;
+            padding: 10px 15px;
+            border-radius: 6px;
+            text-decoration: none;
+            color: #2b6cb0;
+            font-weight: 600;
+            font-size: 14px;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 12px;
+        }
+
+        .img-preview {
+            max-width: 100%;
+            max-height: 450px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            margin-top: 5px;
+        }
+
+        /* --- Forensic Footer --- */
+        .msg-footer {
+            margin-top: 15px;
+            padding-top: 10px;
+            border-top: 1px dashed #e2e8f0;
+            font-size: 11px;
+            color: #718096;
+            font-style: italic;
+            display: block;
+        }
+
+        .msg-footer span {
+            display: inline-block;
+            margin-left: 20px;
+        }
+
+        .badge {
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+
+        .badge-verified { color: #2f855a; background: #f0fff4; border: 1px solid #c6f6d5; }
+        .badge-deleted { color: #c53030; background: #fff5f5; border: 1px solid #feb2b2; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header class="header">
+        <h1>דוח פורנזי: שחזור תכתובת</h1>
+        <table class="meta-table" cellpadding="5" cellspacing="0">
+            <tr>
+                <td><span class="meta-label">מקור (Source):</span> {{ source_platform }}</td>
+                <td><span class="meta-label">שם הצ'אט:</span> {{ chat_name }}</td>
+            </tr>
+            <tr>
+                <td><span class="meta-label">תאריך הפקה:</span> <span class="msg-timestamp">{{ report_date }}</span></td>
+                <td><span class="meta-label">סה"כ הודעות:</span> {{ total_messages }}</td>
+            </tr>
+        </table>
+    </header>
+
+    <main class="message-feed">
+        {% for msg in messages %}
+        <div class="message-row {{ 'is-deleted' if msg.deleted }} {{ 'is-important' if msg.importance == 'high' }}">
+            <table class="msg-top-table">
+                <tr>
+                    <td style="text-align: right;"><span class="msg-sender">{{ msg.sender_display }}</span></td>
+                    <td style="text-align: left; width: 160px;"><span class="msg-timestamp">{{ msg.timestamp }}</span></td>
+                </tr>
+            </table>
+
+            <div class="msg-body">{{ msg.body }}</div>
+
+            <!-- Edit History -->
+            {% if msg.edits %}
+            <div class="edit-history">
+                <span class="edit-title">היסטוריית עריכה (Edits History)</span>
+                {% for edit in msg.edits %}
+                <table class="edit-entry {{ 'edit-entry-border' if not loop.last }}">
+                    <tr>
+                        <td><span class="edit-old-text">{{ edit.body }}</span></td>
+                        <td style="width: 40%; text-align: left;"><span class="edit-metadata">נערך ע"י: {{ edit.author }}</span></td>
+                    </tr>
+                </table>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Reactions -->
+            {% if msg.reactions %}
+            <div class="reactions">
+                {% for reaction in msg.reactions %}
+                <div class="reaction">
+                    <span>{{ reaction.value }}</span>
+                    <span class="reaction-user">{{ reaction.participant }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Attachments -->
+            {% if msg.attachments %}
+            <div class="attachments">
+                {% for att in msg.attachments %}
+                <a href="{{ att.url }}" class="file-link" target="_blank">
+                    {{ '[IMG]' if att.is_image else '[FILE]' }} {{ att.display_name }}
+                </a>
+                {% if att.is_image %}
+                <img src="{{ att.url }}" class="img-preview" alt="Attachment">
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <footer class="msg-footer">
+                <span class="badge {{ 'badge-deleted' if msg.deleted else 'badge-verified' }}">
+                    {{ 'נמחק' if msg.deleted else 'מאומת' }}
+                </span>
+                <span>ID: {{ msg.id }}</span>
+                {% if msg.deleted_label %}
+                <span style="color: #e53e3e">{{ msg.deleted_label }}</span>
+                {% endif %}
+            </footer>
+        </div>
+        {% endfor %}
+    </main>
+</div>
+
+</body>
+</html>
