@@ -235,6 +235,9 @@ def reconcile_conversations(
     # Queue-based so n B no-id messages each consume a distinct A entry; avoids the false-deletion
     # bug where all B messages resolve to A's first entry and the rest stay marked deleted.
     fp_to_keys: dict[str, list[str]] = {}
+    # Maps MD5 fingerprint → ordered list of A keys where A had no native id (key IS the fingerprint).
+    # Enables the reverse bridge: B has a native id, A was exported without one.
+    fp_to_noid_a_keys: dict[str, list[str]] = {}
     seen_a: dict[str, int] = {}
 
     for msg in user_a_msgs:
@@ -247,6 +250,8 @@ def reconcile_conversations(
         global_timeline[key] = _make_entry(msg, user_b_name)
         if msg.get("id"):
             fp_to_keys.setdefault(_compute_fingerprint(msg, participants_map), []).append(key)
+        else:
+            fp_to_noid_a_keys.setdefault(base_key, []).append(key)
 
     seen_b: dict[str, int] = {}
     for msg in user_b_msgs:
@@ -260,6 +265,13 @@ def reconcile_conversations(
         # native id by looking up the MD5 fingerprint.
         if not msg.get("id") and key not in global_timeline:
             candidates = fp_to_keys.get(base_key)
+            if candidates:
+                key = candidates.pop(0)
+        # Reverse bridge: B has a native id but A stored the same message under
+        # its fingerprint key (A had no native id at export time).
+        elif msg.get("id") and key not in global_timeline:
+            fp = _compute_fingerprint(msg, participants_map)
+            candidates = fp_to_noid_a_keys.get(fp)
             if candidates:
                 key = candidates.pop(0)
 

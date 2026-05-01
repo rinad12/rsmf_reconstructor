@@ -196,6 +196,39 @@ class TestIDAmbiguity:
         msg = {"id": "native", "timestamp": "2024-01-01T12:00:00Z", "participant": "u1", "body": "X"}
         assert get_message_key(msg, PMAP) == "native"
 
+    def test_null_id_a_native_id_b_same_physical_message_merges(self):
+        """Reverse bridge: A exported without id, B exported with native id — must verify."""
+        msg_without_id = {
+            "timestamp": "2024-01-01T12:00:00Z",
+            "participant": "u1",
+            "body": "Hello",
+        }
+        msg_with_id = {
+            "id": "42",
+            "timestamp": "2024-01-01T12:00:00Z",
+            "participant": "u1",
+            "body": "Hello",
+        }
+        result = _reconcile([msg_without_id], [msg_with_id])
+        assert len(result) == 1, (
+            f"Expected 1 entry; got {len(result)}. "
+            "Reverse bridge failed: A (no id) and B (native id) were not merged."
+        )
+        assert result[0]["deleted"] == False
+
+    def test_multiple_noid_a_id_b_messages_same_fingerprint_all_verified(self):
+        """Reverse bridge queue: n A no-id messages matched by n B id-bearing messages."""
+        ts = "2024-01-01T12:00:00Z"
+        a1 = {"timestamp": ts, "participant": "u1", "body": "Hi"}
+        a2 = {"timestamp": ts, "participant": "u1", "body": "Hi"}
+        b1 = {"id": "id1", "timestamp": ts, "participant": "u1", "body": "Hi"}
+        b2 = {"id": "id2", "timestamp": ts, "participant": "u1", "body": "Hi"}
+        result = _reconcile([a1, a2], [b1, b2])
+        assert len(result) == 2, f"Expected 2 entries, got {len(result)}"
+        assert all(e["deleted"] == False for e in result), (
+            "Both A entries should be verified via the reverse bridge queue."
+        )
+
     def test_multiple_id_bearing_a_messages_same_fingerprint_all_verified(self):
         """A has n id-bearing messages with the same fingerprint; B has n no-id copies.
 
