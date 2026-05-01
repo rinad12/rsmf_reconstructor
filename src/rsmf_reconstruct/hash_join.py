@@ -182,77 +182,52 @@ def reconcile_conversations(
     user_b_name: str,
     participants_map: dict[str, str],
 ) -> list:
-    """Merge two RSMF message lists into a deduplicated, annotated timeline.
-
-    Performs a full outer hash-join on the two message lists keyed by
-    :func:`get_message_key`, then annotates each merged entry with a
-    deduplication status:
-
-    - ``"Verified in Both"`` — the message key appears in *both* exports,
-      meaning neither participant deleted it.
-    - ``"Deleted by <name>"`` — the message key appears in *only one* export,
-      indicating the other participant deleted it from their side.  The name
-      in the status is the person whose export is *missing* the message.
-
-    The result is sorted by ``(timestamp, participant)`` ascending so the
-    returned list is a strict chronological timeline.
-
-    Args:
-        user_a_msgs: Raw message dicts from User A's RSMF export.
-        user_b_msgs: Raw message dicts from User B's RSMF export.
-        user_a_name: Display name for User A, used in ``"Deleted by"`` labels.
-        user_b_name: Display name for User B, used in ``"Deleted by"`` labels.
-        participants_map: Lookup map produced by :func:`build_participants_map`,
-            forwarded to :func:`get_message_key` and :func:`normalize_message`.
-
-    Returns:
-        A list of normalised message dicts sorted chronologically.  Each dict
-        is produced by :func:`normalize_message` and carries an additional
-        ``"deleted"`` key (``True`` when the message was absent from one
-        export, ``False`` when it appeared in both).
-
-    Examples:
-        >>> pmap = {"u1": "Alice", "u2": "Bob"}
-        >>> shared = {"id": "1", "body": "Hello", "participant": "u1"}
-        >>> only_a  = {"id": "2", "body": "Secret", "participant": "u1"}
-        >>> only_b  = {"id": "3", "body": "Reply",  "participant": "u2"}
-        >>> result = reconcile_conversations([shared, only_a], [shared, only_b], "Alice", "Bob", pmap)
-        >>> {e["id"]: e["deleted"] for e in result}
-        {'1': False, '2': True, '3': True}
     """
-    def _make_entry(msg: dict, deleted_by: str) -> dict:
+    Reconcile and deduplicate messages from two separate RSMF exports.
+    
+    This function performs a full outer join. It accurately identifies which participant's
+    export is missing a record and marks it as 'Deleted by' that specific participant.
+    """
+    
+    def _make_entry(msg: dict, deleted_by_name: str) -> dict:
+        """Helper to create a timeline entry marked as deleted by a specific user export."""
         data = normalize_message(msg)
         data["deleted"] = True
-        data["custom"].append({"name": "Deleted by", "value": deleted_by})
+        # Clear any existing 'Deleted by' fields before adding the correct one
+        data["custom"] = [f for f in data["custom"] if f.get("name") != "Deleted by"]
+        data["custom"].append({"name": "Deleted by", "value": deleted_by_name})
         return data
 
     def _verify(data: dict) -> None:
+        """Mark a message as verified (present in both exports)."""
         data["deleted"] = False
         data["custom"] = [f for f in data["custom"] if f.get("name") != "Deleted by"]
 
     global_timeline: dict[str, dict] = {}
-    # Maps MD5 fingerprint → ordered list of A keys (one per id-bearing message with that fp).
-    # Queue-based so n B no-id messages each consume a distinct A entry; avoids the false-deletion
-    # bug where all B messages resolve to A's first entry and the rest stay marked deleted.
-    fp_to_keys: dict[str, list[str]] = {}
-    # Maps MD5 fingerprint → ordered list of A keys where A had no native id (key IS the fingerprint).
-    # Enables the reverse bridge: B has a native id, A was exported without one.
+    
+    # Indices for cross-referencing IDs and Fingerprints (FPs)
+    fp_to_keys_a: dict[str, list[str]] = {}
     fp_to_noid_a_keys: dict[str, list[str]] = {}
     seen_a: dict[str, int] = {}
 
+    # 1. Map all messages from User A's export
     for msg in user_a_msgs:
         base_key = get_message_key(msg, participants_map)
         n = seen_a.get(base_key, 0)
         seen_a[base_key] = n + 1
-        # Append a collision suffix so two identical fingerprint-only messages
-        # don't overwrite each other (prevents duplicate-message DATA LOSS).
         key = base_key if n == 0 else f"{base_key}#{n}"
+        
+        # Initial state: found in A, assume missing in B until proven otherwise
         global_timeline[key] = _make_entry(msg, user_b_name)
+        
+        # Secondary indexing for ID-bridging
+        fp = _compute_fingerprint(msg, participants_map)
         if msg.get("id"):
-            fp_to_keys.setdefault(_compute_fingerprint(msg, participants_map), []).append(key)
+            fp_to_keys_a.setdefault(fp, []).append(key)
         else:
             fp_to_noid_a_keys.setdefault(base_key, []).append(key)
 
+    # 2. Reconcile with messages from User B's export
     seen_b: dict[str, int] = {}
     for msg in user_b_msgs:
         base_key = get_message_key(msg, participants_map)
@@ -260,29 +235,28 @@ def reconcile_conversations(
         seen_b[base_key] = n + 1
         key = base_key if n == 0 else f"{base_key}#{n}"
 
-        # ID-ambiguity bridge: if B has no native id and the plain key isn't
-        # in the timeline, check whether A stored the same message under its
-        # native id by looking up the MD5 fingerprint.
-        if not msg.get("id") and key not in global_timeline:
-            candidates = fp_to_keys.get(base_key)
-            if candidates:
-                key = candidates.pop(0)
-        # Reverse bridge: B has a native id but A stored the same message under
-        # its fingerprint key (A had no native id at export time).
-        elif msg.get("id") and key not in global_timeline:
-            fp = _compute_fingerprint(msg, participants_map)
-            candidates = fp_to_noid_a_keys.get(fp)
-            if candidates:
-                key = candidates.pop(0)
-
+        # Bridge logic: Match message even if ID presence differs between exports
+        matched_key = None
         if key in global_timeline:
-            _verify(global_timeline[key])
+            matched_key = key
         else:
+            # Check if B's message matches an A message via Fingerprint
+            if not msg.get("id"):
+                candidates = fp_to_keys_a.get(base_key)
+                if candidates: matched_key = candidates.pop(0)
+            else:
+                fp = _compute_fingerprint(msg, participants_map)
+                candidates = fp_to_noid_a_keys.get(fp)
+                if candidates: matched_key = candidates.pop(0)
+
+        if matched_key:
+            # Present in both files
+            _verify(global_timeline[matched_key])
+        else:
+            # Present ONLY in B's file, so it was "Deleted by" User A
             global_timeline[key] = _make_entry(msg, user_a_name)
 
+    # 3. Finalize and sort
     result = list(global_timeline.values())
-    result.sort(key=lambda e: (
-        e.get("timestamp", ""),
-        e.get("participant", ""),
-    ))
+    result.sort(key=lambda e: (e.get("timestamp", ""), e.get("participant", "")))
     return result

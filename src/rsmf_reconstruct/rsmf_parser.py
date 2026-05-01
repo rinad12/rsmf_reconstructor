@@ -12,9 +12,16 @@ import email.header
 from email import policy
 import io
 import json
+import logging
 from pathlib import Path
 import tempfile
 import zipfile
+
+logger = logging.getLogger(__name__)
+
+
+class RsmfParseError(ValueError):
+    """Raised when an RSMF file cannot be read or parsed."""
 
 
 def parse_rsmf(path: Path | str) -> dict:
@@ -31,13 +38,23 @@ def parse_rsmf(path: Path | str) -> dict:
             - ``head``: dict with ``from`` and ``to`` decoded header strings.
             - ``text``: decoded text body of the first text part, or ``None``.
             - ``zip_bytes``: raw bytes of the first non-text attachment, or ``None``.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        RsmfParseError: If the file cannot be parsed as an RSMF archive.
     """
     path = Path(path)
-    raw = path.read_bytes()
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise RsmfParseError(f"Cannot read file '{path.name}': {exc}") from exc
+
     msg = email.message_from_bytes(raw, policy=policy.default)
 
     def decode_header_value(val):
-        """Decode a potentially RFC-2047-encoded header value to a plain string."""
         if not val:
             return ""
         parts = email.header.decode_header(val)
@@ -56,15 +73,19 @@ def parse_rsmf(path: Path | str) -> dict:
     for part in msg.walk():
         if part.get_content_maintype() == 'multipart':
             continue
-
         payload = part.get_payload(decode=True)
         if payload is None:
             continue
-
         if part.get_content_maintype() == 'text' and text is None:
             text = payload.decode('utf-8', errors='replace')
         elif zip_bytes is None:
             zip_bytes = payload
+
+    if zip_bytes is None:
+        raise RsmfParseError(
+            f"The file '{path.name}' does not contain a ZIP attachment. "
+            "It may not be a valid RSMF archive."
+        )
 
     return {
         'head': head,
@@ -73,17 +94,43 @@ def parse_rsmf(path: Path | str) -> dict:
     }
 
 
-def parse_rsmf_manifest(zip_bytes: bytes) -> dict:
+def parse_rsmf_manifest(zip_bytes: bytes, source_name: str = "") -> dict:
     """Read and parse the RSMF manifest from the ZIP attachment.
 
     Args:
         zip_bytes: Raw bytes of the ZIP archive embedded in an RSMF file.
+        source_name: Optional file name shown in error messages.
 
     Returns:
         Parsed contents of ``rsmf_manifest.json`` as a dict.
+
+    Raises:
+        RsmfParseError: If the ZIP is invalid, the manifest is missing, or
+            the manifest JSON is malformed.
     """
-    with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zip_file:
-        manifest = json.loads(zip_file.read('rsmf_manifest.json'))
+    label = f" in '{source_name}'" if source_name else ""
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zip_file:
+            try:
+                raw_manifest = zip_file.read('rsmf_manifest.json')
+            except KeyError:
+                raise RsmfParseError(
+                    f"The archive{label} is missing 'rsmf_manifest.json'. "
+                    "Please provide a valid .rsmf file."
+                )
+            try:
+                manifest = json.loads(raw_manifest)
+            except json.JSONDecodeError as exc:
+                logger.debug("JSON decode error%s: %s", label, exc)
+                raise RsmfParseError(
+                    f"The manifest{label} is corrupted or not valid JSON."
+                ) from exc
+    except zipfile.BadZipFile as exc:
+        logger.debug("Bad ZIP%s: %s", label, exc)
+        raise RsmfParseError(
+            f"The file{label} is corrupted or not a valid RSMF archive."
+        ) from exc
+
     return manifest
 
 
@@ -107,6 +154,7 @@ def extract_rsmf_files(zip_bytes: bytes) -> Path:
             zip_file.extract(member, tmp_dir)
     return tmp_dir / 'attachments'
 
+
 def rsmf_load(path: str) -> tuple[dict, dict]:
     """Parse a single RSMF archive and return its head and manifest.
 
@@ -120,8 +168,8 @@ def rsmf_load(path: str) -> tuple[dict, dict]:
 
     Raises:
         FileNotFoundError: If *path* does not exist.
-        KeyError: If the archive is missing required internal entries.
+        RsmfParseError: If the archive cannot be parsed or is missing required data.
     """
     parsed = parse_rsmf(path)
-    manifest = parse_rsmf_manifest(parsed["zip_bytes"])
+    manifest = parse_rsmf_manifest(parsed["zip_bytes"], source_name=Path(path).name)
     return parsed["head"], manifest

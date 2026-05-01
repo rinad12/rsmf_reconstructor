@@ -12,6 +12,7 @@ Standalone usage:
 
 import argparse
 import io
+import logging
 import os
 import subprocess
 import sys
@@ -20,11 +21,13 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound, select_autoescape
 from playwright.sync_api import sync_playwright
 
 from rsmf_reconstruct.hash_join import build_participants_map, reconcile_conversations
 from rsmf_reconstruct.rsmf_parser import parse_rsmf, parse_rsmf_manifest
+
+logger = logging.getLogger(__name__)
 
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
@@ -98,17 +101,24 @@ def _consolidate_attachments(
     for zip_bytes in (zip_bytes_a, zip_bytes_b):
         if not zip_bytes:
             continue
-        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-            for info in zf.infolist():
-                if not info.filename.startswith("attachments/"):
-                    continue
-                name = Path(info.filename).name
-                if not name:
-                    continue
-                dest = att_out / name
-                if not dest.exists():
-                    dest.write_bytes(zf.read(info.filename))
-                present.add(name)
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+                for info in zf.infolist():
+                    if not info.filename.startswith("attachments/"):
+                        continue
+                    name = Path(info.filename).name
+                    if not name:
+                        continue
+                    dest = att_out / name
+                    if not dest.exists():
+                        try:
+                            dest.write_bytes(zf.read(info.filename))
+                        except Exception as exc:
+                            logger.warning("Could not extract attachment '%s': %s", name, exc)
+                            continue
+                    present.add(name)
+        except zipfile.BadZipFile as exc:
+            logger.warning("Skipping invalid ZIP during attachment consolidation: %s", exc)
 
     return present
 
@@ -203,6 +213,7 @@ def generate_pdf_report(
     timeline: list,
     template_path: str,
     output_dir: str,
+    output_name: str = "report",
 ) -> Path:
     """Render the reconciled timeline into a forensic PDF report using Playwright.
 
@@ -234,50 +245,59 @@ def generate_pdf_report(
 
     # Setup Jinja2 environment
     template_file = Path(template_path).resolve()
+    if not template_file.exists():
+        raise FileNotFoundError(f"Report template not found: {template_file}")
     env = Environment(
         loader=FileSystemLoader(str(template_file.parent)),
         autoescape=select_autoescape(["html"]),
         keep_trailing_newline=True,
     )
-    html_content = env.get_template(template_file.name).render(**context)
+    try:
+        html_content = env.get_template(template_file.name).render(**context)
+    except TemplateNotFound as exc:
+        raise FileNotFoundError(f"Report template not found: {exc}") from exc
 
     output.mkdir(parents=True, exist_ok=True)
     
     # Save temporary HTML to the output directory
     # This allows Playwright to resolve relative file links correctly
-    html_out = output / "report.html"
+    html_out = output / f"{output_name}.html"
     html_out.write_text(html_content, encoding="utf-8")
 
-    pdf_out = output / "report.pdf"
+    pdf_out = output / f"{output_name}.pdf"
 
     # Use Playwright for PDF generation
-    with sync_playwright() as p:
-        try:
-            # Launch browser
-            browser = p.chromium.launch(headless=True)
-        except Exception as e:
-            if "playwright install" in str(e).lower():
-                print("Playwright browsers not found. Attempting to install Chromium...")
-                subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    try:
+        with sync_playwright() as p:
+            try:
                 browser = p.chromium.launch(headless=True)
-            else:
-                raise e
+            except Exception as exc:
+                if "playwright install" in str(exc).lower():
+                    print("Playwright browsers not found. Attempting to install Chromium...")
+                    subprocess.run(
+                        [sys.executable, "-m", "playwright", "install", "chromium"],
+                        check=True,
+                    )
+                    browser = p.chromium.launch(headless=True)
+                else:
+                    raise
 
-        context_pw = browser.new_context()
-        page = context_pw.new_page()
-
-        # Navigation to the actual file on disk is better for resolving local assets/links
-        page.goto(html_out.as_uri(), wait_until="networkidle")
-        
-        # Generate the PDF with links enabled (default behavior in Playwright)
-        page.pdf(
-            path=str(pdf_out),
-            format="A4",
-            print_background=True,
-            display_header_footer=False,
-            margin={"top": "1cm", "bottom": "1cm", "left": "1cm", "right": "1cm"}
-        )
-
-        browser.close()
+            context_pw = browser.new_context()
+            page = context_pw.new_page()
+            page.goto(html_out.as_uri(), wait_until="networkidle")
+            page.pdf(
+                path=str(pdf_out),
+                format="A4",
+                print_background=True,
+                display_header_footer=False,
+                margin={"top": "1cm", "bottom": "1cm", "left": "1cm", "right": "1cm"},
+            )
+            browser.close()
+    except Exception:
+        logger.exception("Playwright PDF generation failed")
+        raise
+    finally:
+        if html_out.exists():
+            html_out.unlink()
 
     return pdf_out
