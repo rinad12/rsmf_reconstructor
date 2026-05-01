@@ -196,6 +196,22 @@ class TestIDAmbiguity:
         msg = {"id": "native", "timestamp": "2024-01-01T12:00:00Z", "participant": "u1", "body": "X"}
         assert get_message_key(msg, PMAP) == "native"
 
+    def test_multiple_id_bearing_a_messages_same_fingerprint_all_verified(self):
+        """A has n id-bearing messages with the same fingerprint; B has n no-id copies.
+
+        Each B message must consume a distinct A entry so none are falsely marked deleted.
+        """
+        ts = "2024-01-01T12:00:00Z"
+        a1 = {"id": "id1", "timestamp": ts, "participant": "u1", "body": "Hi"}
+        a2 = {"id": "id2", "timestamp": ts, "participant": "u1", "body": "Hi"}
+        b1 = {"timestamp": ts, "participant": "u1", "body": "Hi"}
+        b2 = {"timestamp": ts, "participant": "u1", "body": "Hi"}
+        result = _reconcile([a1, a2], [b1, b2])
+        assert len(result) == 2, f"Expected 2 entries, got {len(result)}"
+        assert all(e["deleted"] == False for e in result), (
+            "Both A entries should be verified; the queue-based bridge must consume one per B message."
+        )
+
 
 # ---------------------------------------------------------------------------
 # 5. Missing or Corrupt Fields
@@ -353,16 +369,14 @@ class TestScaleAndPerformance:
 
 
 # ---------------------------------------------------------------------------
-# 8. Fingerprint Strategy Analysis
+# 8. Fingerprint Gaps (known limitations, documented as regression sentinels)
 # ---------------------------------------------------------------------------
 
-class TestFingerprintStrategySufficiency:
-    """Probe whether timestamp|sender|body is sufficient for forensic standards.
+class TestFingerprintGaps:
+    """Assert the current fingerprint gaps so they serve as sentinels for future fixes.
 
-    Tests in this class deliberately assert the *current broken behaviour* to
-    document known fingerprint gaps.  They pass today precisely because the gap
-    exists; they serve as regression sentinels and as a specification for
-    enhancements.
+    These tests pass today precisely because the gap exists — they document known
+    limitations of the ``timestamp|sender|body`` composite, not correct behaviour.
     """
 
     def test_message_type_not_in_fingerprint(self):
@@ -393,6 +407,13 @@ class TestFingerprintStrategySufficiency:
             "Fingerprint gap confirmed: attachment metadata is not included in the hash. "
             "Two different attachments sent at the same millisecond collide."
         )
+
+
+# ---------------------------------------------------------------------------
+# 9. Core Utilities
+# ---------------------------------------------------------------------------
+
+class TestCoreUtilities:
 
     def test_deleted_by_annotation_removed_on_verify(self):
         msg = {"id": "10", "body": "In both", "participant": "u1"}

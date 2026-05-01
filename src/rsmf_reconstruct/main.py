@@ -9,7 +9,7 @@ import argparse
 import json
 
 from rsmf_reconstruct.hash_join import build_participants_map, reconcile_conversations
-from rsmf_reconstruct.rsfm_parser import rsmf_load
+from rsmf_reconstruct.rsmf_parser import rsmf_load
 
 
 def main() -> None:

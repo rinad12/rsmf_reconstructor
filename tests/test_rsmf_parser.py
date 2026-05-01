@@ -1,4 +1,4 @@
-"""Tests for rsmf_reconstruct.rsfm_parser."""
+"""Tests for rsmf_reconstruct.rsmf_parser."""
 
 import io
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from rsmf_reconstruct.rsfm_parser import (
+from rsmf_reconstruct.rsmf_parser import (
     extract_rsmf_files,
     _parse_rsmf as parse_rsmf,
     _parse_rsmf_manifest as parse_rsmf_manifest,

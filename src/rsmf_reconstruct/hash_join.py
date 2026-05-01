@@ -19,7 +19,7 @@ Typical workflow::
         participants_map=participants_map,
     )
     for entry in timeline:
-        print(entry["status"], entry["data"]["body"])
+        print(entry["deleted"], entry["body"])
 """
 
 import hashlib
@@ -231,9 +231,10 @@ def reconcile_conversations(
         data["custom"] = [f for f in data["custom"] if f.get("name") != "Deleted by"]
 
     global_timeline: dict[str, dict] = {}
-    # Maps MD5 fingerprint of id-bearing A messages → their key in global_timeline.
-    # Used to resolve ID-ambiguity: B exports the same message without a native id.
-    fp_to_key: dict[str, str] = {}
+    # Maps MD5 fingerprint → ordered list of A keys (one per id-bearing message with that fp).
+    # Queue-based so n B no-id messages each consume a distinct A entry; avoids the false-deletion
+    # bug where all B messages resolve to A's first entry and the rest stay marked deleted.
+    fp_to_keys: dict[str, list[str]] = {}
     seen_a: dict[str, int] = {}
 
     for msg in user_a_msgs:
@@ -245,7 +246,7 @@ def reconcile_conversations(
         key = base_key if n == 0 else f"{base_key}#{n}"
         global_timeline[key] = _make_entry(msg, user_b_name)
         if msg.get("id"):
-            fp_to_key.setdefault(_compute_fingerprint(msg, participants_map), key)
+            fp_to_keys.setdefault(_compute_fingerprint(msg, participants_map), []).append(key)
 
     seen_b: dict[str, int] = {}
     for msg in user_b_msgs:
@@ -258,7 +259,9 @@ def reconcile_conversations(
         # in the timeline, check whether A stored the same message under its
         # native id by looking up the MD5 fingerprint.
         if not msg.get("id") and key not in global_timeline:
-            key = fp_to_key.get(base_key, key)
+            candidates = fp_to_keys.get(base_key)
+            if candidates:
+                key = candidates.pop(0)
 
         if key in global_timeline:
             _verify(global_timeline[key])
@@ -271,18 +274,3 @@ def reconcile_conversations(
         e.get("participant", ""),
     ))
     return result
-
-
-def sort_timeline(timeline: list[dict]) -> list[dict]:
-    """Sort a reconciled timeline by message timestamp ascending.
-
-    Entries without a timestamp are placed at the end.
-
-    Args:
-        timeline: Output of :func:`reconcile_conversations` — a list of
-            normalised message dicts.
-
-    Returns:
-        A new sorted list; the input is not mutated.
-    """
-    return sorted(timeline, key=lambda entry: entry.get("timestamp") or "")
