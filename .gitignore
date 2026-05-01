@@ -29,3 +29,6 @@ test_result/
 
 # Claude
 *.claude
+
+# Logs
+*.log
