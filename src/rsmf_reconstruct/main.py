@@ -2,13 +2,11 @@
 
 Usage:
     python -m rsmf_reconstruct file_a.rsmf file_b.rsmf
-    rsmf-reconstruct file_a.rsmf file_b.rsmf      # after pip install
-
-Prints a JSON array of reconciled messages to stdout.
+    rsmf-reconstruct file_a.rsmf file_b.rsmf [-o output.json]  # after pip install
 """
 
+import argparse
 import json
-import sys
 
 from rsmf_reconstruct.hash_join import build_participants_map, reconcile_conversations
 from rsmf_reconstruct.rsfm_parser import rsmf_load
@@ -25,7 +23,7 @@ def main() -> None:
 
     Command-line interface::
 
-        rsmf-reconstruct <file_a.rsmf> <file_b.rsmf>
+        rsmf-reconstruct <file_a.rsmf> <file_b.rsmf> [-o output.json]
 
     Args:
         None — arguments are read from :data:`sys.argv`.
@@ -34,9 +32,8 @@ def main() -> None:
         None
 
     Side effects:
-        * Writes ``reconciled_messages.json`` to the working directory.
-        * Prints a usage message to *stderr* and exits with code 1 if the
-          wrong number of arguments is supplied.
+        * Writes the output file (default: ``reconciled_messages.json``).
+        * Exits with code 1 on argument errors.
 
     Output schema:
 
@@ -49,11 +46,20 @@ def main() -> None:
             "events": [...]
         }
     """
-    if len(sys.argv) != 3:
-        print("Usage: rsmf-reconstruct <file_a.rsmf> <file_b.rsmf>", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        prog="rsmf-reconstruct",
+        description="Reconcile two RSMF message exports into a single timeline.",
+    )
+    parser.add_argument("file_a", help="First participant's .rsmf export")
+    parser.add_argument("file_b", help="Second participant's .rsmf export")
+    parser.add_argument(
+        "-o", "--output",
+        default="reconciled_messages.json",
+        help="Output file path (default: reconciled_messages.json)",
+    )
+    args = parser.parse_args()
 
-    path_a, path_b = sys.argv[1], sys.argv[2]
+    path_a, path_b = args.file_a, args.file_b
 
     head_a, manifest_a = rsmf_load(path_a)
     head_b, manifest_b = rsmf_load(path_b)
@@ -83,7 +89,7 @@ def main() -> None:
         "events": timeline,
     }
 
-    with open("reconciled_messages.json", "w", encoding="utf-8") as f:
+    with open(args.output, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
 

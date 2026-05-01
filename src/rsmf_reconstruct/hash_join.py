@@ -286,30 +286,3 @@ def sort_timeline(timeline: list[dict]) -> list[dict]:
         A new sorted list; the input is not mutated.
     """
     return sorted(timeline, key=lambda entry: entry.get("timestamp") or "")
-
-
-def create_evidence_hashmap(messages: list[dict]) -> dict:
-    """Index a list of normalised message dicts by their ``"id"`` field.
-
-    Produces a dictionary for O(1) lookup of a message by its identifier.
-    Intended for use after :func:`reconcile_conversations` when callers need
-    to cross-reference individual messages by ID.
-
-    Args:
-        messages: A list of message dicts.  Each dict **must** contain an
-            ``"id"`` key; if two messages share an ID, the last one wins.
-
-    Returns:
-        A ``dict`` mapping each message's ``"id"`` value to the full message
-        dict.
-
-    Raises:
-        KeyError: If any dict in ``messages`` does not contain an ``"id"``
-            key.
-
-    Examples:
-        >>> msgs = [{"id": "1", "body": "Hi"}, {"id": "2", "body": "Bye"}]
-        >>> create_evidence_hashmap(msgs)
-        {'1': {'id': '1', 'body': 'Hi'}, '2': {'id': '2', 'body': 'Bye'}}
-    """
-    return {msg["id"]: msg for msg in messages}
