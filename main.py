@@ -1,6 +1,4 @@
-def main():
-    print("Hello from rsmf-reader!")
-
+from rsmf_reconstruct.main import main
 
 if __name__ == "__main__":
     main()
