@@ -1,4 +1,4 @@
- RSMF Reconciler & Chat Log Utility
+# RSMF Reconciler & Chat Log Utility
 
 A specialized data management utility designed to reconcile asymmetrical Relativity Short Message Format (RSMF) exports. This tool identifies and aligns messages across multiple sources to produce a unified, structured chronological transcript.
 
